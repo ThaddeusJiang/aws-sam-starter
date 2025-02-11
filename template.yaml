@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   sam-app
@@ -11,10 +11,10 @@ Globals:
     Timeout: 3
 
 Resources:
-  HelloWorldFunction:
+  CommentsFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
-      CodeUri: hello-world/
+      CodeUri: comments/
       Handler: app.lambdaHandler
       Runtime: nodejs22.x
       Architectures:
@@ -26,20 +26,25 @@ Resources:
         Variables:
           TABLE_NAME: !Ref CommentsTable
       Events:
-        HelloWorld:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+        GetComments:
+          Type: Api
           Properties:
-            Path: /hello/{id}
+            Path: /comments
             Method: get
-        HelloWorldPost:
+        GetComment:
           Type: Api
           Properties:
-            Path: /hello
+            Path: /comments/{id}
+            Method: get
+        CreateComment:
+          Type: Api
+          Properties:
+            Path: /comments
             Method: post
-        HelloWorldPut:
+        UpdateComment:
           Type: Api
           Properties:
-            Path: /hello/{id}
+            Path: /comments/{id}
             Method: put
     Metadata: # Manage esbuild properties
       BuildMethod: esbuild
@@ -48,7 +53,7 @@ Resources:
         Target: "es2020"
         Sourcemap: true
         EntryPoints:
-        - app.ts
+          - app.ts
 
   CommentsTable:
     Type: AWS::DynamoDB::Table
@@ -68,15 +73,15 @@ Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
   # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  HelloWorldApi:
-    Description: "API Gateway endpoint URL for Prod stage for Hello World function"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
-  HelloWorldFunction:
-    Description: "Hello World Lambda Function ARN"
-    Value: !GetAtt HelloWorldFunction.Arn
-  HelloWorldFunctionIamRole:
-    Description: "Implicit IAM Role created for Hello World function"
-    Value: !GetAtt HelloWorldFunctionRole.Arn
+  CommentsApi:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/comments/"
+  CommentsFunction:
+    Description: "Comments Lambda Function ARN"
+    Value: !GetAtt CommentsFunction.Arn
+  CommentsFunctionIamRole:
+    Description: "IAM Role created for Comments function"
+    Value: !GetAtt CommentsFunctionRole.Arn
   CommentsTable:
     Description: "DynamoDB Table Name for Comments"
     Value: !Ref CommentsTable
