@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "template.yaml": "yaml"
+    },
+    "yaml.customTags": [
+        "!Ref",
+        "!Sub",
+        "!GetAtt"
+    ]
+}
