@@ -64,29 +64,29 @@ export const lambdaHandler = async (
 		let response;
 
 		switch (httpMethod) {
-			case 'GET':
-				if (pathParameters?.id) {
-					response = await getItem(pathParameters.id);
-				} else {
-					response = await listItems();
-				}
-				break;
-			case 'POST':
-				const createInput = CreateCommentSchema.parse(JSON.parse(body || '{}'));
-				response = await createItem(createInput);
-				break;
-			case 'PUT':
-				const updateInput = UpdateCommentSchema.parse(JSON.parse(body || '{}'));
-				response = await updateItem(pathParameters?.id, updateInput);
-				break;
-			case 'DELETE':
-				response = await deleteItem(pathParameters?.id);
-				break;
-			default:
-				response = {
-					statusCode: 405,
-					body: JSON.stringify({ message: 'Method Not Allowed' }),
-				};
+		case 'GET':
+			if (pathParameters?.id) {
+				response = await getItem(pathParameters.id);
+			} else {
+				response = await listItems();
+			}
+			break;
+		case 'POST':
+			const createInput = CreateCommentSchema.parse(JSON.parse(body || '{}'));
+			response = await createItem(createInput);
+			break;
+		case 'PUT':
+			const updateInput = UpdateCommentSchema.parse(JSON.parse(body || '{}'));
+			response = await updateItem(pathParameters?.id, updateInput);
+			break;
+		case 'DELETE':
+			response = await deleteItem(pathParameters?.id);
+			break;
+		default:
+			response = {
+				statusCode: 405,
+				body: JSON.stringify({ message: 'Method Not Allowed' }),
+			};
 		}
 
 		return response;

@@ -7,8 +7,8 @@
 	"author": "SAM CLI",
 	"license": "MIT",
 	"scripts": {
-		"lint": "eslint . --ext .ts",
-		"format": "prettier --write '**/*.{ts,json}' && eslint . --ext .ts --fix",
+		"lint": "eslint . --ext .ts,.js",
+		"format": "prettier --write '**/*.{ts,json,js}' && eslint . --ext .ts,.js --fix",
 		"test": "jest",
 		"compile": "tsc",
 		"build": "npm run format && npm run compile"
