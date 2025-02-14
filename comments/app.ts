@@ -15,13 +15,14 @@ const CommentSchema = z.object({
   id: z.string(),
   content: z.string().min(1, '评论内容不能为空').max(1000, '评论内容不能超过1000个字符'),
   author: z.string().min(1, '作者名不能为空').max(50, '作者名不能超过50个字符'),
+  userId: z.string(),
+  email: z.string().email(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
 const CreateCommentSchema = z.object({
   content: z.string().min(1, '评论内容不能为空').max(1000, '评论内容不能超过1000个字符'),
-  author: z.string().min(1, '作者名不能为空').max(50, '作者名不能超过50个字符'),
 });
 
 const UpdateCommentSchema = z
@@ -31,7 +32,6 @@ const UpdateCommentSchema = z
       .min(1, '评论内容不能为空')
       .max(1000, '评论内容不能超过1000个字符')
       .optional(),
-    author: z.string().min(1, '作者名不能为空').max(50, '作者名不能超过50个字符').optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: '至少需要更新一个字段',
@@ -45,6 +45,18 @@ type UpdateCommentInput = z.infer<typeof UpdateCommentSchema>;
 const client = new DynamoDBClient({});
 const ddbDocClient = DynamoDBDocumentClient.from(client);
 const tableName = process.env.TABLE_NAME || 'CommentsTable';
+
+// 从认证上下文中获取用户信息
+const getUserFromEvent = (event: APIGatewayProxyEvent) => {
+  const claims = event.requestContext.authorizer?.claims;
+  if (!claims) {
+    throw new Error('未找到用户信息');
+  }
+  return {
+    userId: claims.sub as string,
+    email: claims.email as string,
+  };
+};
 
 /**
  *
@@ -72,12 +84,14 @@ export const lambdaHandler = async (
         }
         break;
       case 'POST':
+        const user = getUserFromEvent(event);
         const createInput = CreateCommentSchema.parse(JSON.parse(body || '{}'));
-        response = await createItem(createInput);
+        response = await createItem(createInput, user);
         break;
       case 'PUT':
+        const updateUser = getUserFromEvent(event);
         const updateInput = UpdateCommentSchema.parse(JSON.parse(body || '{}'));
-        response = await updateItem(pathParameters?.id, updateInput);
+        response = await updateItem(pathParameters?.id, updateInput, updateUser);
         break;
       case 'DELETE':
         response = await deleteItem(pathParameters?.id);
@@ -101,10 +115,18 @@ export const lambdaHandler = async (
         }),
       };
     }
+    if (err instanceof Error) {
+      return {
+        statusCode: 401,
+        body: JSON.stringify({
+          message: err.message,
+        }),
+      };
+    }
     return {
       statusCode: 500,
       body: JSON.stringify({
-        message: 'some error happened',
+        message: 'Internal Server Error',
       }),
     };
   }
@@ -139,12 +161,17 @@ const getItem = async (id: string | undefined): Promise<APIGatewayProxyResult> =
   };
 };
 
-const createItem = async (input: CreateCommentInput): Promise<APIGatewayProxyResult> => {
+const createItem = async (
+  input: CreateCommentInput,
+  user: { userId: string; email: string }
+): Promise<APIGatewayProxyResult> => {
   const timestamp = new Date().toISOString();
   const item: Comment = {
     id: Date.now().toString(),
     content: input.content,
-    author: input.author,
+    author: user.email.split('@')[0], // 使用邮箱前缀作为作者名
+    userId: user.userId,
+    email: user.email,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -164,7 +191,8 @@ const createItem = async (input: CreateCommentInput): Promise<APIGatewayProxyRes
 
 const updateItem = async (
   id: string | undefined,
-  input: UpdateCommentInput
+  input: UpdateCommentInput,
+  user: { userId: string; email: string }
 ): Promise<APIGatewayProxyResult> => {
   if (!id) {
     return {
@@ -188,6 +216,14 @@ const updateItem = async (
     };
   }
 
+  // 检查是否是评论作者
+  if (Item.userId !== user.userId) {
+    return {
+      statusCode: 403,
+      body: JSON.stringify({ message: '只有评论作者才能修改评论' }),
+    };
+  }
+
   const updateExpressions: string[] = [];
   const expressionAttributeNames: { [key: string]: string } = {};
   const expressionAttributeValues: { [key: string]: string | undefined } = {};
@@ -202,12 +238,6 @@ const updateItem = async (
     updateExpressions.push('#content = :content');
     expressionAttributeNames['#content'] = 'content';
     expressionAttributeValues[':content'] = input.content;
-  }
-
-  if (input.author !== undefined) {
-    updateExpressions.push('#author = :author');
-    expressionAttributeNames['#author'] = 'author';
-    expressionAttributeValues[':author'] = input.author;
   }
 
   const params = {
@@ -263,9 +293,25 @@ const listItems = async (): Promise<APIGatewayProxyResult> => {
     };
   }
 
-  const comments = z.array(CommentSchema).parse(Items);
-  return {
-    statusCode: 200,
-    body: JSON.stringify(comments),
-  };
+  try {
+    const comments = Items.map(item => ({
+      id: item.id,
+      content: item.content,
+      author: item.author,
+      userId: item.userId || '',  // 为旧数据提供默认值
+      email: item.email || '',    // 为旧数据提供默认值
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    }));
+    return {
+      statusCode: 200,
+      body: JSON.stringify(comments),
+    };
+  } catch (err) {
+    console.error('Error parsing comments:', err);
+    return {
+      statusCode: 200,
+      body: JSON.stringify([]),
+    };
+  }
 };
