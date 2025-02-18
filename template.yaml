@@ -33,11 +33,14 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref CommentsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt CreateCommentsQueue.QueueName
       Environment:
         Variables:
           TABLE_NAME: !Ref CommentsTable
           USER_POOL_ID: !Ref CognitoUserPool
           CLIENT_ID: !Ref CognitoUserPoolClient
+          CREATE_QUEUE_URL: !Ref CreateCommentsQueue
       Events:
         GetComments:
           Type: Api
@@ -65,6 +68,13 @@ Resources:
           Properties:
             Path: /comments/{id}
             Method: put
+            Auth:
+              Authorizer: CognitoAuthorizer
+        DeleteComment:
+          Type: Api
+          Properties:
+            Path: /comments/{id}
+            Method: delete
             Auth:
               Authorizer: CognitoAuthorizer
     Metadata: # Manage esbuild properties
@@ -118,6 +128,40 @@ Resources:
         - ALLOW_REFRESH_TOKEN_AUTH
       PreventUserExistenceErrors: ENABLED
 
+  SqsCreateCommentHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: comments/
+      Handler: app.sqsCreateCommentHandler
+      Runtime: nodejs22.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CommentsTable
+        - SQSPollerPolicy:
+            QueueName: !GetAtt CreateCommentsQueue.QueueName
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CreateCommentsQueue.Arn
+            BatchSize: 1
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: "es2020"
+        Sourcemap: true
+        EntryPoints:
+          - app.ts
+
+  CreateCommentsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: create-comments-queue
+      VisibilityTimeout: 30
+
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
   # Find out more about other implicit resources you can reference within SAM
@@ -140,3 +184,6 @@ Outputs:
   CognitoUserPoolClientId:
     Description: "Cognito User Pool Client ID"
     Value: !Ref CognitoUserPoolClient
+  CreateCommentsQueueUrl:
+    Description: "URL of the SQS Queue for creating comments"
+    Value: !Ref CreateCommentsQueue

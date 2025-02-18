@@ -3,12 +3,14 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
-  PutCommand,
-  DeleteCommand,
   UpdateCommand,
   ScanCommand,
+  DeleteCommand,
+  PutCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { z } from 'zod';
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import { SQSEvent } from 'aws-lambda';
 
 // Zod schemas
 const CommentSchema = z.object({
@@ -45,6 +47,8 @@ type UpdateCommentInput = z.infer<typeof UpdateCommentSchema>;
 const client = new DynamoDBClient({});
 const ddbDocClient = DynamoDBDocumentClient.from(client);
 const tableName = process.env.TABLE_NAME || 'CommentsTable';
+
+const sqs = new SQSClient({ region: process.env.AWS_REGION });
 
 // 从认证上下文中获取用户信息
 const getUserFromEvent = (event: APIGatewayProxyEvent) => {
@@ -94,7 +98,7 @@ export const lambdaHandler = async (
         response = await updateItem(pathParameters?.id, updateInput, updateUser);
         break;
       case 'DELETE':
-        response = await deleteItem(pathParameters?.id);
+        response = await deleteComment(event);
         break;
       default:
         response = {
@@ -165,28 +169,35 @@ const createItem = async (
   input: CreateCommentInput,
   user: { userId: string; email: string }
 ): Promise<APIGatewayProxyResult> => {
-  const timestamp = new Date().toISOString();
-  const item: Comment = {
-    id: Date.now().toString(),
-    content: input.content,
-    author: user.email.split('@')[0], // 使用邮箱前缀作为作者名
-    userId: user.userId,
-    email: user.email,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+  try {
+    // 发送创建请求到 SQS
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: process.env.CREATE_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        content: input.content,
+        userId: user.userId,
+        email: user.email,
+      }),
+    }));
 
-  const params = {
-    TableName: tableName,
-    Item: item,
-  };
-
-  await ddbDocClient.send(new PutCommand(params));
-
-  return {
-    statusCode: 201,
-    body: JSON.stringify(item),
-  };
+    return {
+      statusCode: 202,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: "Create request accepted",
+      }),
+    };
+  } catch (err) {
+    console.error(err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        message: "Internal server error",
+      }),
+    };
+  }
 };
 
 const updateItem = async (
@@ -258,25 +269,77 @@ const updateItem = async (
   };
 };
 
-const deleteItem = async (id: string | undefined) => {
-  if (!id) {
+const deleteComment = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  try {
+    const commentId = event.pathParameters?.id;
+    if (!commentId) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          message: "Comment ID is required",
+        }),
+      };
+    }
+
+    const authorizer = event.requestContext.authorizer;
+    if (!authorizer || !authorizer.claims || !authorizer.claims.sub) {
+      return {
+        statusCode: 401,
+        body: JSON.stringify({
+          message: "Unauthorized",
+        }),
+      };
+    }
+
+    // 首先检查评论是否存在
+    const getParams = {
+      TableName: tableName,
+      Key: { id: commentId },
+    };
+
+    const { Item } = await ddbDocClient.send(new GetCommand(getParams));
+
+    if (!Item) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ message: '评论不存在' }),
+      };
+    }
+
+    // 检查是否是评论作者
+    if (Item.userId !== authorizer.claims.sub) {
+      return {
+        statusCode: 403,
+        body: JSON.stringify({ message: '只有评论作者才能删除评论' }),
+      };
+    }
+
+    // 执行删除操作
+    const deleteParams = {
+      TableName: tableName,
+      Key: { id: commentId },
+    };
+
+    await ddbDocClient.send(new DeleteCommand(deleteParams));
+
     return {
-      statusCode: 400,
-      body: JSON.stringify({ message: 'ID is required' }),
+      statusCode: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: "Comment deleted successfully",
+      }),
+    };
+  } catch (err) {
+    console.error(err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        message: "Internal server error",
+      }),
     };
   }
-
-  const params = {
-    TableName: tableName,
-    Key: { id },
-  };
-
-  await ddbDocClient.send(new DeleteCommand(params));
-
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ message: 'Item deleted successfully' }),
-  };
 };
 
 const listItems = async (): Promise<APIGatewayProxyResult> => {
@@ -313,5 +376,40 @@ const listItems = async (): Promise<APIGatewayProxyResult> => {
       statusCode: 200,
       body: JSON.stringify([]),
     };
+  }
+};
+
+// Add SQS handler
+export const sqsCreateCommentHandler = async (event: SQSEvent) => {
+  try {
+    for (const record of event.Records) {
+      const { content, userId, email } = JSON.parse(record.body);
+
+      const timestamp = new Date().toISOString();
+      const item = {
+        id: Date.now().toString(),
+        content,
+        author: email.split('@')[0],
+        userId,
+        email,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+
+      // 验证数据
+      CommentSchema.parse(item);
+
+      // 保存到 DynamoDB
+      const params = {
+        TableName: tableName,
+        Item: item,
+      };
+
+      await ddbDocClient.send(new PutCommand(params));
+      console.log(`Successfully created comment ${item.id}`);
+    }
+  } catch (err) {
+    console.error('Error processing create requests:', err);
+    throw err;
   }
 };
